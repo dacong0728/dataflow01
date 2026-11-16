@@ -1,0 +1,6 @@
+{
+  "name": "数仓 Skill 编排台",
+  "description": "面向本地 Agent 与数仓 AI 提效架构的可视化 Skill 编排、上下文产出串联与多 Session 实时协同工作台",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
