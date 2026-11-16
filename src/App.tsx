@@ -2,8 +2,6 @@ import React, { useCallback, useState } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 import { ArchitectureModal } from './components/ArchitectureModal';
 import { PipelineCanvas } from './components/PipelineCanvas';
-import { SessionChatPanel } from './components/SessionChatPanel';
-import { SkillPaletteSidebar } from './components/SkillPaletteSidebar';
 import { TopBar } from './components/TopBar';
 import {
   createNodeFromSkill,
@@ -14,11 +12,8 @@ import {
 import type {
   AgentSession,
   CanvasActionPayload,
-  CanvasActionSummary,
-  ChatMessage,
   OutputFormat,
   PipelineNode,
-  ScenarioId,
   SkillDefinition,
 } from './types/orchestrator';
 
@@ -32,51 +27,22 @@ function formatNowTime(): string {
   });
 }
 
-function makeMessageId(): string {
-  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-}
-
-const INITIAL_MESSAGES: ChatMessage[] = [
-  {
-    id: 'init-master-1',
-    sessionId: 'master',
-    role: 'assistant',
-    content:
-      '主控 Session 已就绪。当前画布已加载「交付型 · 新建模型」链路示例。\n\n你可以：\n1. 从左侧拖拽缺失的 Skill（例如「双表数据对账 two-table-reconciliation」）到 ETL 节点下方，或拖拽调整已有节点顺序；\n2. 点击右上角「一键生成结果」，由我统一分配主/子 Session、根据上下游上下文合成 Prompt 并串联执行；\n3. 直接在右侧与我或任意子 Session 对话，对话中的修改或“新增模块”指令会实时同步更新到画布。',
-    timestamp: formatNowTime(),
-  },
-];
-
 export default function App() {
-  const [activeScenario, setActiveScenario] = useState<ScenarioId>('delivery');
   const [taskBrief, setTaskBrief] = useState<string>(
     SCENARIO_PRESETS.delivery.defaultTaskBrief,
-  );
-  const [orchestratorName, setOrchestratorName] = useState<string>(
-    SCENARIO_PRESETS.delivery.orchestratorName,
   );
   const [nodes, setNodes] = useState<PipelineNode[]>(() =>
     SCENARIO_PRESETS.delivery.nodes.map((n) => ({ ...n })),
   );
-  const [sessions, setSessions] = useState<AgentSession[]>(INITIAL_SESSIONS);
-  const [activeSessionId, setActiveSessionId] = useState<string>('master');
-  const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
+  const [sessions] = useState<AgentSession[]>(INITIAL_SESSIONS);
 
   const [isOrchestrating, setIsOrchestrating] = useState<boolean>(false);
   const [progressLabel, setProgressLabel] = useState<string>('');
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
-  const [isSendingChat, setIsSendingChat] = useState<boolean>(false);
+  const [isApplyingCommand, setIsApplyingCommand] = useState<boolean>(false);
+  const [lastCommandNote, setLastCommandNote] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isDiagramModalOpen, setIsDiagramModalOpen] = useState<boolean>(false);
-
-  const setSessionStatus = useCallback(
-    (sessionId: string, status: AgentSession['status']) => {
-      setSessions((prev) =>
-        prev.map((s) => (s.id === sessionId ? { ...s, status } : s)),
-      );
-    },
-    [],
-  );
 
   const highlightAndScrollNode = useCallback((instanceId: string) => {
     setNodes((prev) =>
@@ -94,28 +60,18 @@ export default function App() {
           n.instanceId === instanceId ? { ...n, isHighlighted: false } : n,
         ),
       );
-    }, 2800);
+    }, 2600);
   }, []);
 
-  const handleSelectScenario = (scenarioId: ScenarioId) => {
+  const handleResetExample = () => {
     if (isOrchestrating) return;
-    const preset = SCENARIO_PRESETS[scenarioId];
-    setActiveScenario(scenarioId);
-    setTaskBrief(preset.defaultTaskBrief);
-    setOrchestratorName(preset.orchestratorName);
-    setNodes(preset.nodes.map((n) => ({ ...n })));
+    setTaskBrief(SCENARIO_PRESETS.delivery.defaultTaskBrief);
+    setNodes(SCENARIO_PRESETS.delivery.nodes.map((n) => ({ ...n })));
+    setLastCommandNote(null);
     setErrorMessage(null);
   };
 
-  const handleAddSkillToEnd = (skill: SkillDefinition) => {
-    const newNode = createNodeFromSkill(skill);
-    setNodes((prev) => [...prev, newNode]);
-    highlightAndScrollNode(newNode.instanceId);
-  };
-
-  const handleDropFromCatalog = (skillId: string, insertIndex: number) => {
-    const skill = SKILLS_CATALOG.find((s) => s.id === skillId);
-    if (!skill) return;
+  const handleInsertSkillAt = (skill: SkillDefinition, insertIndex: number) => {
     const newNode = createNodeFromSkill(skill);
     setNodes((prev) => {
       const next = [...prev];
@@ -182,10 +138,7 @@ export default function App() {
         updatedBy: '已清空',
       })),
     );
-  };
-
-  const handleFocusChatForNode = (node: PipelineNode) => {
-    setActiveSessionId(node.assignedSessionId || 'master');
+    setLastCommandNote(null);
   };
 
   const executeSingleNodeRequest = async (
@@ -198,7 +151,6 @@ export default function App() {
       sessions.find((s) => s.id === targetNode.assignedSessionId) || sessions[0];
 
     setRunningNodeId(targetNode.instanceId);
-    setSessionStatus(assignedSession.id, 'running');
     setNodes((prev) =>
       prev.map((n) =>
         n.instanceId === targetNode.instanceId
@@ -258,7 +210,6 @@ export default function App() {
       throw err;
     } finally {
       setRunningNodeId(null);
-      setSessionStatus(assignedSession.id, 'idle');
     }
   };
 
@@ -285,13 +236,11 @@ export default function App() {
     if (isOrchestrating || nodes.length === 0) return;
 
     setErrorMessage(null);
+    setLastCommandNote(null);
     setIsOrchestrating(true);
-    setProgressLabel('主控 Session 正在统筹分配...');
-    setSessionStatus('master', 'thinking');
-    setActiveSessionId('master');
+    setProgressLabel('主控分配 Session 与 Prompt...');
 
     try {
-      // Step 1: Master Session Orchestration Plan (assign sessions + synthesize prompts)
       setNodes((prev) =>
         prev.map((n) => ({ ...n, executionStatus: 'planning' })),
       );
@@ -308,18 +257,18 @@ export default function App() {
       });
       const planData = await planRes.json();
       if (!planRes.ok) {
-        throw new Error(planData.error || '主控分配调度失败');
+        throw new Error(planData.error || '主控调度分配失败');
       }
 
       const planMap = new Map<
         string,
-        { assignedSessionId: string; synthesizedPrompt: string; rationale: string }
+        { assignedSessionId: string; synthesizedPrompt: string }
       >();
       for (const item of planData.plan || []) {
         planMap.set(item.instanceId, item);
       }
 
-      let plannedNodes: PipelineNode[] = nodes.map((n) => {
+      const plannedNodes: PipelineNode[] = nodes.map((n) => {
         const match = planMap.get(n.instanceId);
         if (!match) return { ...n, executionStatus: 'queued' };
         const validSessionId = sessions.some((s) => s.id === match.assignedSessionId)
@@ -334,50 +283,18 @@ export default function App() {
       });
 
       setNodes(plannedNodes);
-      setSessionStatus('master', 'idle');
+      if (planData.masterSummary) {
+        setLastCommandNote(`主控调度完成：${planData.masterSummary}`);
+      }
 
-      // Log Master Session's delegation decision in chat
-      const allocationLines = plannedNodes
-        .map((n, idx) => {
-          const sName =
-            sessions.find((s) => s.id === n.assignedSessionId)?.name ||
-            n.assignedSessionId;
-          const rationale = planMap.get(n.instanceId)?.rationale || '按链路上下文分配';
-          return `${idx + 1}. ${n.name} → ${sName}（${rationale}）`;
-        })
-        .join('\n');
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: makeMessageId(),
-          sessionId: 'master',
-          role: 'system',
-          content: `${planData.masterSummary || '主控 Session 已完成链路分析与任务分配：'}\n\n${allocationLines}`,
-          timestamp: formatNowTime(),
-        },
-      ]);
-
-      // Step 2: Sequential Execution with Chained Upstream Context
       const workingNodes = [...plannedNodes];
       for (let i = 0; i < workingNodes.length; i++) {
         setProgressLabel(`执行 (${i + 1}/${workingNodes.length}) ${workingNodes[i].displayName}`);
         const updated = await executeSingleNodeRequest(workingNodes, i);
         workingNodes[i] = updated;
       }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: makeMessageId(),
-          sessionId: 'master',
-          role: 'assistant',
-          content: `已完成全部 ${workingNodes.length} 个 Skill 模块的串联执行与产出汇总。你可以点击任意模块右侧的「对话修改」，或直接在这里告诉我需要补充或调整的环节。`,
-          timestamp: formatNowTime(),
-        },
-      ]);
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : '一键编排执行失败');
+      setErrorMessage(err instanceof Error ? err.message : '一键生成结果失败');
       setNodes((prev) =>
         prev.map((n) =>
           n.executionStatus === 'planning' || n.executionStatus === 'queued'
@@ -388,7 +305,6 @@ export default function App() {
     } finally {
       setIsOrchestrating(false);
       setProgressLabel('');
-      setSessionStatus('master', 'idle');
       setRunningNodeId(null);
     }
   };
@@ -396,9 +312,8 @@ export default function App() {
   const applyCanvasActions = (
     actions: CanvasActionPayload[],
     actorSessionName: string,
-  ): { nextNodes: PipelineNode[]; summaries: CanvasActionSummary[] } => {
+  ): PipelineNode[] => {
     let nextNodes = [...nodes];
-    const summaries: CanvasActionSummary[] = [];
     let focusInstanceId: string | null = null;
 
     for (const action of actions) {
@@ -447,12 +362,6 @@ export default function App() {
 
         nextNodes.splice(insertIdx, 0, newNode);
         focusInstanceId = newNode.instanceId;
-        summaries.push({
-          type: 'add_block',
-          targetNodeId: newNode.instanceId,
-          skillName: skill.name,
-          summary: `已新增模块：${skill.displayName} (${skill.name})`,
-        });
       } else if (action.type === 'update_block' && action.targetInstanceId) {
         const idx = nextNodes.findIndex(
           (n) => n.instanceId === action.targetInstanceId,
@@ -481,52 +390,27 @@ export default function App() {
           isHighlighted: true,
         };
 
-        // Mark completed downstream blocks as stale so chain dependency is transparent
         for (let d = idx + 1; d < nextNodes.length; d++) {
           if (nextNodes[d].executionStatus === 'completed') {
             nextNodes[d] = { ...nextNodes[d], executionStatus: 'stale' };
           }
         }
-
         focusInstanceId = existing.instanceId;
-        summaries.push({
-          type: 'update_block',
-          targetNodeId: existing.instanceId,
-          skillName: existing.name,
-          summary: `已同步更新：${existing.displayName} (${existing.name})`,
-        });
       } else if (action.type === 'remove_block' && action.targetInstanceId) {
-        const removed = nextNodes.find(
-          (n) => n.instanceId === action.targetInstanceId,
-        );
-        if (!removed) continue;
         nextNodes = nextNodes.filter(
           (n) => n.instanceId !== action.targetInstanceId,
         );
-        summaries.push({
-          type: 'remove_block',
-          skillName: removed.name,
-          summary: `已移除模块：${removed.displayName} (${removed.name})`,
-        });
-      } else if (action.type === 'assign_session' && action.targetInstanceId && action.assignedSessionId) {
-        const target = nextNodes.find(
-          (n) => n.instanceId === action.targetInstanceId,
-        );
-        if (!target) continue;
+      } else if (
+        action.type === 'assign_session' &&
+        action.targetInstanceId &&
+        action.assignedSessionId
+      ) {
         nextNodes = nextNodes.map((n) =>
           n.instanceId === action.targetInstanceId
             ? { ...n, assignedSessionId: action.assignedSessionId!, isHighlighted: true }
             : n,
         );
-        focusInstanceId = target.instanceId;
-        const sName =
-          sessions.find((s) => s.id === action.assignedSessionId)?.name ||
-          action.assignedSessionId;
-        summaries.push({
-          type: 'assign_session',
-          targetNodeId: target.instanceId,
-          summary: `已重新分配 ${target.displayName} → ${sName}`,
-        });
+        focusInstanceId = action.targetInstanceId;
       } else if (
         action.type === 'reorder_blocks' &&
         Array.isArray(action.orderedInstanceIds)
@@ -542,10 +426,6 @@ export default function App() {
           }
         }
         nextNodes = ordered;
-        summaries.push({
-          type: 'reorder_blocks',
-          summary: '已按对话指令调整模块编排顺序',
-        });
       }
     }
 
@@ -561,32 +441,27 @@ export default function App() {
             n.instanceId === targetId ? { ...n, isHighlighted: false } : n,
           ),
         );
-      }, 3000);
+      }, 2800);
     }
 
-    return { nextNodes, summaries };
+    return nextNodes;
   };
 
-  const handleSendMessage = async (text: string) => {
-    if (isSendingChat) return;
+  const handleRunAgentCommand = async (
+    commandText: string,
+    targetNode?: PipelineNode,
+  ) => {
+    if (isApplyingCommand || isOrchestrating) return;
 
-    const currentSession =
-      sessions.find((s) => s.id === activeSessionId) || sessions[0];
-    const userMsg: ChatMessage = {
-      id: makeMessageId(),
-      sessionId: activeSessionId,
-      role: 'user',
-      content: text,
-      timestamp: formatNowTime(),
-    };
+    const targetSession = targetNode
+      ? sessions.find((s) => s.id === targetNode.assignedSessionId) || sessions[0]
+      : sessions[0];
 
-    const historyForSession = [...messages, userMsg]
-      .filter((m) => m.sessionId === activeSessionId && m.role !== 'system')
-      .map((m) => ({ role: m.role, content: m.content }));
+    const composedMessage = targetNode
+      ? `请针对模块「${targetNode.displayName} (${targetNode.name})，instanceId="${targetNode.instanceId}"」执行以下修改并同步更新其产出：${commandText}`
+      : commandText;
 
-    setMessages((prev) => [...prev, userMsg]);
-    setIsSendingChat(true);
-    setSessionStatus(activeSessionId, 'thinking');
+    setIsApplyingCommand(true);
     setErrorMessage(null);
 
     try {
@@ -594,9 +469,9 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session: currentSession,
-          message: text,
-          history: historyForSession,
+          session: targetSession,
+          message: composedMessage,
+          history: [],
           taskBrief,
           nodes,
           catalogSkills: SKILLS_CATALOG.map((s) => ({
@@ -611,53 +486,34 @@ export default function App() {
           })),
         }),
       });
-
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Session 对话请求失败');
+        throw new Error(data.error || '指令同步失败');
       }
 
       const actions: CanvasActionPayload[] = Array.isArray(data.actions)
         ? data.actions
         : [];
-      let appliedSummaries: CanvasActionSummary[] = [];
-
       if (actions.length > 0) {
-        const { nextNodes, summaries } = applyCanvasActions(
-          actions,
-          currentSession.name,
-        );
-        setNodes(nextNodes);
-        appliedSummaries = summaries;
+        const updatedNodes = applyCanvasActions(actions, targetSession.name);
+        setNodes(updatedNodes);
       }
 
-      const assistantMsg: ChatMessage = {
-        id: makeMessageId(),
-        sessionId: activeSessionId,
-        role: 'assistant',
-        content: data.reply || '已处理你的请求。',
-        timestamp: formatNowTime(),
-        actionsApplied: appliedSummaries,
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
+      setLastCommandNote(data.reply || '已同步更新画布。');
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : '对话同步失败');
+      setErrorMessage(err instanceof Error ? err.message : '指令执行失败');
     } finally {
-      setIsSendingChat(false);
-      setSessionStatus(activeSessionId, 'idle');
+      setIsApplyingCommand(false);
     }
   };
 
-  const handleLocateNode = (instanceId: string) => {
-    highlightAndScrollNode(instanceId);
-  };
-
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#F8FAFC]">
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#F4F6F9]">
       <TopBar
-        activeScenario={activeScenario}
-        onSelectScenario={handleSelectScenario}
         onRunAll={() => void handleRunAll()}
+        onOpenDiagram={() => setIsDiagramModalOpen(true)}
+        onResetExample={handleResetExample}
+        onClearOutputs={handleClearOutputs}
         isOrchestrating={isOrchestrating}
         progressLabel={progressLabel}
         hasNodes={nodes.length > 0}
@@ -680,42 +536,24 @@ export default function App() {
         </div>
       )}
 
-      <div className="flex-1 min-h-0 flex overflow-hidden">
-        <SkillPaletteSidebar
-          skills={SKILLS_CATALOG}
-          onAddSkill={handleAddSkillToEnd}
-          onOpenDiagram={() => setIsDiagramModalOpen(true)}
-        />
-
-        <PipelineCanvas
-          taskBrief={taskBrief}
-          onChangeTaskBrief={setTaskBrief}
-          orchestratorName={orchestratorName}
-          nodes={nodes}
-          sessions={sessions}
-          runningNodeId={runningNodeId}
-          isOrchestrating={isOrchestrating}
-          onDropFromCatalog={handleDropFromCatalog}
-          onReorderNode={handleReorderNode}
-          onMoveNodeStep={handleMoveNodeStep}
-          onRemoveNode={handleRemoveNode}
-          onChangeNodeSession={handleChangeNodeSession}
-          onChangeNodePrompt={handleChangeNodePrompt}
-          onRunSingleNode={(id) => void handleRunSingleNode(id)}
-          onFocusChatForNode={handleFocusChatForNode}
-          onClearOutputs={handleClearOutputs}
-        />
-
-        <SessionChatPanel
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          onSelectSession={setActiveSessionId}
-          messages={messages}
-          onSendMessage={handleSendMessage}
-          isSending={isSendingChat}
-          onLocateNode={handleLocateNode}
-        />
-      </div>
+      <PipelineCanvas
+        taskBrief={taskBrief}
+        onChangeTaskBrief={setTaskBrief}
+        nodes={nodes}
+        sessions={sessions}
+        runningNodeId={runningNodeId}
+        isOrchestrating={isOrchestrating}
+        isApplyingCommand={isApplyingCommand}
+        lastCommandNote={lastCommandNote}
+        onInsertSkillAt={handleInsertSkillAt}
+        onReorderNode={handleReorderNode}
+        onMoveNodeStep={handleMoveNodeStep}
+        onRemoveNode={handleRemoveNode}
+        onChangeNodeSession={handleChangeNodeSession}
+        onChangeNodePrompt={handleChangeNodePrompt}
+        onRunSingleNode={(id) => void handleRunSingleNode(id)}
+        onRunAgentCommand={handleRunAgentCommand}
+      />
 
       <ArchitectureModal
         isOpen={isDiagramModalOpen}

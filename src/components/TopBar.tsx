@@ -1,62 +1,61 @@
 import React from 'react';
 import { Loader2, Play } from 'lucide-react';
-import type { ScenarioId } from '../types/orchestrator';
 
 interface TopBarProps {
-  activeScenario: ScenarioId;
-  onSelectScenario: (id: ScenarioId) => void;
   onRunAll: () => void;
+  onOpenDiagram: () => void;
+  onResetExample: () => void;
+  onClearOutputs: () => void;
   isOrchestrating: boolean;
   progressLabel: string;
   hasNodes: boolean;
 }
 
-const SCENARIO_TABS: Array<{ id: ScenarioId; label: string }> = [
-  { id: 'delivery', label: '交付型主线' },
-  { id: 'support', label: '支持型主线' },
-  { id: 'ops', label: '运维保障主线' },
-  { id: 'custom', label: '自定义画布' },
-];
-
 export const TopBar: React.FC<TopBarProps> = ({
-  activeScenario,
-  onSelectScenario,
   onRunAll,
+  onOpenDiagram,
+  onResetExample,
+  onClearOutputs,
   isOrchestrating,
   progressLabel,
   hasNodes,
 }) => {
   return (
-    <header className="h-14 shrink-0 bg-white border-b border-slate-200 px-6 flex items-center justify-between gap-8">
+    <header className="h-14 shrink-0 bg-white/95 backdrop-blur-sm border-b border-slate-200/90 px-6 flex items-center justify-between gap-8">
       {/* Zone 1: Brand Title */}
       <a
         href="#top"
         onClick={(e) => e.preventDefault()}
-        className="text-[16px] font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+        className="text-[15.5px] font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
       >
         数仓 Skill 编排台
       </a>
 
-      {/* Zone 2: Scenario Tabs (4 concise single-line links) */}
-      <nav aria-label="业务场景预设" className="flex items-center gap-6 overflow-x-auto">
-        {SCENARIO_TABS.map((tab) => {
-          const isActive = activeScenario === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => onSelectScenario(tab.id)}
-              className={`relative py-4 text-[13.5px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                isActive ? 'text-[#2563EB]' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {tab.label}
-              {isActive && (
-                <span className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#2563EB]" />
-              )}
-            </button>
-          );
-        })}
+      {/* Zone 2: Clean single-line utility text links */}
+      <nav aria-label="画布操作" className="flex items-center gap-6">
+        <button
+          type="button"
+          onClick={onOpenDiagram}
+          className="text-[13px] font-medium text-slate-600 hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          参考架构图
+        </button>
+        <button
+          type="button"
+          onClick={onResetExample}
+          disabled={isOrchestrating}
+          className="text-[13px] font-medium text-slate-600 hover:text-slate-900 hover:underline underline-offset-4 disabled:opacity-40 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          恢复默认链路
+        </button>
+        <button
+          type="button"
+          onClick={onClearOutputs}
+          disabled={isOrchestrating || !hasNodes}
+          className="text-[13px] font-medium text-slate-600 hover:text-slate-900 hover:underline underline-offset-4 disabled:opacity-40 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          清空产出
+        </button>
       </nav>
 
       {/* Zone 3: Single Primary Action */}
@@ -70,7 +69,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           {isOrchestrating ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              <span>{progressLabel || '主控调度执行中...'}</span>
+              <span>{progressLabel || '主控执行中...'}</span>
             </>
           ) : (
             <>
